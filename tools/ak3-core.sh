@@ -15,15 +15,19 @@ split_img=$home/split_img;
 # ui_print "<text>" [...]
 ui_print() {
   until [ ! "$1" ]; do
-    echo -e "ui_print $1
-      ui_print" >> /proc/self/fd/$OUTFD;
+    if $BOOTMODE; then
+      echo "$1";
+    else
+      echo -e "ui_print $1
+        ui_print" >> /proc/self/fd/$OUTFD;
+    fi;
     shift;
   done;
 }
 
 # abort ["<text>" [...]]
 abort() {
-  ui_print " " "$@";
+  ui_print " " "!! $*; Aborting!" " ";
   exit 1;
 }
 
@@ -68,7 +72,7 @@ split_boot() {
   local dumpfail;
 
   if [ ! -e "$(echo $block | cut -d\  -f1)" ]; then
-    abort "Invalid partition. Aborting...";
+    abort "  • Invalid partition.";
   fi;
   if [ "$(echo $block | grep ' ')" ]; then
     block=$(echo $block | cut -d\  -f1);
@@ -134,7 +138,7 @@ split_boot() {
   fi;
 
   if [ $? != 0 -o "$dumpfail" ]; then
-    abort "Dumping/splitting image failed. Aborting...";
+    abort "  • Dumping/splitting image failed.";
   fi;
   cd $home;
 }
@@ -155,13 +159,13 @@ unpack_ramdisk() {
   if [ -f ramdisk.cpio ]; then
     comp=$($bin/magiskboot decompress ramdisk.cpio 2>&1 | grep -v 'raw' | sed -n 's;.*\[\(.*\)\];\1;p');
   else
-    abort "No ramdisk found to unpack. Aborting...";
+    abort "  • No ramdisk found to unpack.";
   fi;
   if [ "$comp" ]; then
     mv -f ramdisk.cpio ramdisk.cpio.$comp;
     $bin/magiskboot decompress ramdisk.cpio.$comp ramdisk.cpio;
     if [ $? != 0 ]; then
-      echo "Attempting ramdisk unpack with busybox $comp..." >&2;
+      echo "  • Attempting ramdisk unpack with busybox $comp." >&2;
       $comp -dc ramdisk.cpio.$comp > ramdisk.cpio;
     fi;
   fi;
@@ -173,7 +177,7 @@ unpack_ramdisk() {
   cd $ramdisk;
   EXTRACT_UNSAFE_SYMLINKS=1 cpio -d -F $split_img/ramdisk.cpio -i;
   if [ $? != 0 -o ! "$(ls)" ]; then
-    abort "Unpacking ramdisk failed. Aborting...";
+    abort "  • Unpacking ramdisk failed!";
   fi;
   if [ -d "$home/rdtmp" ]; then
     cp -af $home/rdtmp/* .;
@@ -181,7 +185,9 @@ unpack_ramdisk() {
 }
 ### dump_boot (dump and split image, then extract ramdisk)
 dump_boot() {
+  ui_print "  • Unpacking boot image";
   split_boot;
+  ui_print "  • Unpacking ramdisk";
   unpack_ramdisk;
 }
 ###
@@ -217,14 +223,14 @@ repack_ramdisk() {
   if [ "$comp" ]; then
     $bin/magiskboot compress=$comp ramdisk-new.cpio;
     if [ $? != 0 ]; then
-      echo "Attempting ramdisk repack with busybox $comp..." >&2;
+      echo "  • Attempting ramdisk repack with busybox $comp..." >&2;
       $comp -9c ramdisk-new.cpio > ramdisk-new.cpio.$comp;
       test $? != 0 && packfail=1;
       rm -f ramdisk-new.cpio;
     fi;
   fi;
   if [ "$packfail" ]; then
-    abort "Repacking ramdisk failed. Aborting...";
+    abort "  • Repacking ramdisk failed!";
   fi;
 
   if [ -f "$bin/mkmtkhdr" -a -f "$split_img/boot.img-base" ]; then
@@ -239,12 +245,14 @@ repack_ramdisk() {
 flash_boot() {
   local varlist i kernel ramdisk fdt cmdline comp part0 part1 nocompflag signfail pk8 cert avbtype;
 
+  ui_print "  • Repacking boot image";
+
   cd $split_img;
   if [ -f "$bin/mkimage" ]; then
     varlist="name arch os type comp addr ep";
   elif [ -f "$bin/mkbootimg" -a -f "$bin/unpackelf" -a -f boot.img-base ]; then
     mv -f cmdline.txt boot.img-cmdline 2>/dev/null;
-    varlist="cmdline base pagesize kernel_offset ramdisk_offset tags_offset";
+    varlist="cmdline base pagesize kerneloff ramdiskoff tagsoff";
   fi;
   for i in $varlist; do
     if [ -f boot.img-$i ]; then
@@ -304,7 +312,7 @@ flash_boot() {
     $bin/rkcrc -k $ramdisk $home/boot-new.img;
   elif [ -f "$bin/mkbootimg" -a -f "$bin/unpackelf" -a -f boot.img-base ]; then
     test "$dt" && dt="--dt $dt";
-    $bin/mkbootimg --kernel $kernel --ramdisk $ramdisk --cmdline "$cmdline" --base $home --pagesize $pagesize --kernel_offset $kernel_offset --ramdisk_offset $ramdisk_offset --tags_offset "$tags_offset" $dt --output $home/boot-new.img;
+    $bin/mkbootimg --kernel $kernel --ramdisk $ramdisk --cmdline "$cmdline" --base $home --pagesize $pagesize --kernel_offset $kerneloff --ramdisk_offset $ramdiskoff --tags_offset "$tagsoff" $dt --output $home/boot-new.img;
   else
     test "$kernel" && cp -f $kernel kernel;
     test "$ramdisk" && cp -f $ramdisk ramdisk.cpio;
@@ -318,22 +326,21 @@ flash_boot() {
           $bin/magiskboot cpio ramdisk.cpio test;
           magisk_patched=$?;
         fi;
-        if [ $((magisk_patched & 3)) -eq 1 ]; then
-          ui_print " " "Magisk detected! Patching kernel so reflashing Magisk is not necessary...";
+        if [ $((magisk_patched & 3)) -eq 0 ]; then
           comp=$($bin/magiskboot decompress kernel 2>&1 | grep -v 'raw' | sed -n 's;.*\[\(.*\)\];\1;p');
           ($bin/magiskboot split $kernel || $bin/magiskboot decompress $kernel kernel) 2>/dev/null;
           if [ $? != 0 -a "$comp" ]; then
-            echo "Attempting kernel unpack with busybox $comp..." >&2;
+            echo "  • Attempting kernel unpack with busybox $comp..." >&2;
             $comp -dc $kernel > kernel;
           fi;
-          $bin/magiskboot hexpatch kernel 736B69705F696E697472616D667300 77616E745F696E697472616D667300;
+          $bin/magiskboot hexpatch kernel 77616E745F696E697472616D667300 736B69705F696E697472616D667300;
           if [ "$(file_getprop $home/anykernel.sh do.systemless)" == 1 ]; then
             strings kernel | grep -E 'Linux version.*#' > $home/vertmp;
           fi;
           if [ "$comp" ]; then
             $bin/magiskboot compress=$comp kernel kernel.$comp;
             if [ $? != 0 ]; then
-              echo "Attempting kernel repack with busybox $comp..." >&2;
+              echo "  • Attempting kernel repack with busybox $comp..." >&2;
               $comp -9c kernel > kernel.$comp;
             fi;
             mv -f kernel.$comp kernel;
@@ -345,6 +352,7 @@ flash_boot() {
             test -f $fdt && $bin/magiskboot dtb $fdt patch;
           done;
         else
+          ui_print "  • Magisk has been preserved.";
           case $kernel in
             *-dtb) rm -f kernel_dtb;;
           esac;
@@ -358,7 +366,7 @@ flash_boot() {
     $bin/magiskboot repack $nocompflag $bootimg $home/boot-new.img;
   fi;
   if [ $? != 0 ]; then
-    abort "Repacking image failed. Aborting...";
+    abort "  • Repacking image failed!";
   fi;
 
   cd $home;
@@ -369,28 +377,30 @@ flash_boot() {
     fi;
     test $? != 0 && signfail=1;
   fi;
-  if [ -f "$bin/boot_signer-dexed.jar" -a -d "$bin/avb" ]; then
+  if [ -f "$bin/BootSignature_Android.jar" -a -d "$bin/avb" ]; then
     pk8=$(ls $bin/avb/*.pk8);
     cert=$(ls $bin/avb/*.x509.*);
     case $block in
       *recovery*|*SOS*) avbtype=recovery;;
       *) avbtype=boot;;
     esac;
-    if [ "$(/system/bin/dalvikvm -Xnoimage-dex2oat -cp $bin/boot_signer-dexed.jar com.android.verity.BootSignature -verify boot.img 2>&1 | grep VALID)" ]; then
-      echo "Signing with AVBv1..." >&2;
-      /system/bin/dalvikvm -Xnoimage-dex2oat -cp $bin/boot_signer-dexed.jar com.android.verity.BootSignature /$avbtype boot-new.img $pk8 $cert boot-new-signed.img;
+    if [ "$(/system/bin/dalvikvm -Xnoimage-dex2oat -cp $bin/BootSignature_Android.jar com.android.verity.BootSignature -verify boot.img 2>&1 | grep VALID)" ]; then
+      echo "  • Signing with AVBv1." >&2;
+      /system/bin/dalvikvm -Xnoimage-dex2oat -cp $bin/BootSignature_Android.jar com.android.verity.BootSignature /$avbtype boot-new.img $pk8 $cert boot-new-signed.img;
     fi;
   fi;
   if [ $? != 0 -o "$signfail" ]; then
-    abort "Signing image failed. Aborting...";
+    abort "  • Signing image failed!";
   fi;
   mv -f boot-new-signed.img boot-new.img 2>/dev/null;
 
   if [ ! -f boot-new.img ]; then
-    abort "No repacked image found to flash. Aborting...";
+    abort "  • No repacked image found to flash!";
   elif [ "$(wc -c < boot-new.img)" -gt "$(wc -c < boot.img)" ]; then
-    abort "New image larger than boot partition. Aborting...";
+    abort "  • New image larger than boot partition.";
   fi;
+
+  ui_print "  • Flashing new boot image.";
   if [ -f "$bin/flash_erase" -a -f "$bin/nandwrite" ]; then
     $bin/flash_erase $block 0 0;
     $bin/nandwrite -p $block boot-new.img;
@@ -401,7 +411,7 @@ flash_boot() {
     cat boot-new.img /dev/zero > $block 2>/dev/null || true;
   fi;
   if [ $? != 0 ]; then
-    abort "Flashing image failed. Aborting...";
+    abort " • Flashing image failed!";
   fi;
 }
 
@@ -420,7 +430,7 @@ flash_dtbo() {
   if [ "$dtbo" ]; then
     dtboblock=/dev/block/bootdevice/by-name/dtbo$slot;
     if [ ! -e "$dtboblock" ]; then
-      abort "dtbo partition could not be found. Aborting...";
+      abort "  • dtbo partition could not be found!";
     fi;
     if [ -f "$bin/flash_erase" -a -f "$bin/nandwrite" ]; then
       $bin/flash_erase $dtboblock 0 0;
@@ -432,12 +442,13 @@ flash_dtbo() {
       cat $dtbo /dev/zero > $dtboblock 2>/dev/null || true;
     fi;
     if [ $? != 0 ]; then
-      abort "Flashing dtbo failed. Aborting...";
+      abort "  • Flashing dtbo failed!";
     fi;
   fi;
 }
 ### write_boot (repack ramdisk then build, sign and write image and dtbo)
 write_boot() {
+  ui_print "  • Repacking ramdisk.";
   repack_ramdisk;
   flash_boot;
   flash_dtbo;
@@ -699,7 +710,7 @@ setup_ak() {
         esac;
       fi;
       if [ ! "$slot" -a "$is_slot_device" == 1 ]; then
-        abort "Unable to determine active boot slot. Aborting...";
+        abort "  • Unable to determine active boot slot.";
       fi;
     ;;
   esac;
@@ -722,7 +733,7 @@ setup_ak() {
             if [ "$mtdpart" == "$part" ]; then
               mtdname=$(echo $mtdmount | cut -d: -f1);
             else
-              abort "Unable to determine mtd $block partition. Aborting...";
+              abort "  • Unable to determine mtd $block partition";
             fi;
             if [ -e /dev/mtd/$mtdname ]; then
               target=/dev/mtd/$mtdname;
@@ -744,7 +755,7 @@ setup_ak() {
       if [ "$target" ]; then
         block=$(ls $target 2>/dev/null);
       else
-        abort "Unable to determine $block partition. Aborting...";
+        abort "  • Unable to determine $block partition.";
       fi;
     ;;
     *)
@@ -753,9 +764,6 @@ setup_ak() {
       fi;
     ;;
   esac;
-  if [ ! "$no_block_display" ]; then
-    ui_print "$block";
-  fi;
 }
 ###
 
