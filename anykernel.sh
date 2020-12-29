@@ -11,9 +11,6 @@ do.cleanup=1
 do.cleanuponabort=0
 device.name1=raphael
 device.name2=raphaelin
-device.name3=cepheus
-device.name4=crux
-device.name5=Mi9
 
 supported.versions=
 supported.patchlevels=
@@ -38,17 +35,19 @@ restore_file /vendor/etc/init/hw/init.target.rc;
 ## AnyKernel install
 split_boot;
 
-# Set display timing mode based on ZIP file name
-case "$ZIPFILE" in
-*66fps*|*66hz*)
-    ui_print "  • Setting 66 Hz refresh rate"
-    patch_cmdline "msm_drm.timing_override" "msm_drm.timing_override=1"
-    ;;
-  *)
-    ui_print "  • Setting 60 Hz refresh rate"
-    patch_cmdline "msm_drm.timing_override" ""
-    ;;
-esac
+#
+#case "$ZIPFILE" in
+#  *oc*)
+#    ui_print "  • Setting 75 Hz refresh rate"
+#    patch_cmdline "msm_drm.framerate_override" "msm_drm.framerate_override=1"
+#    ;;
+#  *)
+#    patch_cmdline "msm_drm.framerate_override" ""
+#    fr=$(cat /sdcard/framerate_override | tr -cd "[0-9]");
+#    [ $fr -eq oc ] && ui_print "  • Setting 75 Hz refresh rate" && patch_cmdline "msm_drm.framerate_override" "msm_drm.framerate_override=1"
+#    ;;
+#esac
+#
 
 if mountpoint -q /data; then
   # Optimize F2FS extension list (@arter97)
@@ -96,15 +95,10 @@ fi
 flash_boot;
 flash_dtbo;
 
-#ui_print "  • Adding GMS DOZE module";
-#rm -rf /data/adb/modules/GMSmodule;
-#mkdir -p /data/adb/modules/GMSmodule;
-#cp -rf GMSmodule/ /data/adb/modules/;
-
-#ui_print "  • Adding IMMENSiTY Service Module";
-#rm -rf /data/adb/modules/IMMENSiTYmodule;
-#mkdir -p /data/adb/modules/IMMENSiTYmodule;
-#cp -rf IMMENSiTYmodule/ /data/adb/modules/;
+#ui_print "  • Adding IMMENS1TY Service Module";
+#rm -rf /data/adb/modules/IMMENS1TYmodule;
+#mkdir -p /data/adb/modules/IMMENS1TYmodule;
+#cp -rf IMMENS1TYmodule/ /data/adb/modules/;
 
 ## end install
 
